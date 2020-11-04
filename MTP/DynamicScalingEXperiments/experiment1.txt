@@ -1,0 +1,12 @@
+Latency measurement through RAN log.
+Rx-throughput from DNN
+Core startup times from UPF.
+Initial SEtup:
+Increase the number of cores slowly from 1 to 4.
+Initial Delay on  every core: 150 us
+Step change: 30 us
+Final Delay : 0us
+Interval of switch : 10 seconds.
+For first 60 seconds, only 1 core will run. Next 60 second 2 cores, next 60 seconds 3 cores and so on.
+Why such a slow increase? To increase the inter core launching time. 
+

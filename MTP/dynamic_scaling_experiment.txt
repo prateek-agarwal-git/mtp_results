@@ -1,0 +1,32 @@
+Setup: 
+
+- RTC
+-UEs - 2048 * 8
+-Total sessions- 128000
+-Run time - 60 secs (Why? Later)
+
+-Dynamic Scaling
+-- It takes a total of 4 cores to handle this traffic. No further cores were started. Within 60 seconds all the cores are started. So 3 cores were started during this period to handle the incoming packets.
+
+-Without Dynamic Scaling
+-- For comparison, another run was performed with the same parameters. 4 cores were started before the start of forwarding of traffic.
+
+Results:
+
+-Throughput
+-- Dynamic Scaling - 27.08 Gbps
+-- W/o. Dynamic Scaling - 31.43 Gbps
+
+-Latency
+--Node Latency at UPF is measured for the packets on the master core.
+-- Dynamic Scaling - 5 micro seconds
+-- Without dynamic scaling - 21 micro seconds
+-- Latency in dynamic scaling (case D)  is less than that of without dynamic scaling (case W).
+-- In case W, packets from multiple queues are transmitted through the same port. If the traffic on all the cores is uniform, latency scales linearly with the number of cores. 
+--- This was confirmed by starting RTC setup with different number of up link cores. 
+---- 1 - 5 us, 2 - 11 us, 3 - 14.99 us, 4 - 21 us.
+
+-- In case D, most of the packets received at master cores are with less number of queues configured.
+
+Why I think latency measurements in this case is not a good idea?
+-When we stop and reconfigure port, no new packets are received on the existing cores. As hardware queues are also reconfigured,existing packets in queues are also dropped.

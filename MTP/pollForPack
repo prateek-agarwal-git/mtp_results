@@ -1,0 +1,294 @@
+
+RTE_DECLARE_PER_LCORE(int, ulPerCoreGranularityTimer);
+RTE_DECLARE_PER_LCORE(int, numULPktsInBatch);
+RTE_DECLARE_PER_LCORE(struct rte_ether_hdr, ulEthHdr);
+// 3 "Lines of interest"
+RTE_DECLARE_PER_LCORE(ulong, pollingEvents);
+//RTE_DECLARE_PER_LCORE(ulong, noPkt);
+RTE_DECLARE_PER_LCORE(double,averageQueueLength);
+void pollForPackets()
+{
+    LOG_ENTRY;
+    RTE_DEFINE_PER_LCORE(int, ulPerCoreGranularityTimer);
+    RTE_DEFINE_PER_LCORE(int, numULPktsInBatch);
+    RTE_DEFINE_PER_LCORE(struct rte_ether_hdr, ulEthHdr);
+
+	RTE_DEFINE_PER_LCORE(ulong, pollingEvents);
+    RTE_DEFINE_PER_LCORE(uint, pktCnt);
+// 4 "lines of interest"
+    //RTE_DEFINE_PER_LCORE(ulong, ulpktCnt);
+    //RTE_DEFINE_PER_LCORE(ulong, noPkt);
+	RTE_DEFINE_PER_LCORE(double,averageQueueLength);
+	RTE_PER_LCORE(averageQueueLength)= 0.0;
+    RTE_PER_LCORE(ulPerCoreGranularityTimer) = 1;
+    RTE_PER_LCORE(pktCnt) = 0;
+    upf *upfInstance = upf::getInstance();
+    int lcoreNum = rte_lcore_id();
+    uint16_t nb_rx;
+    uint16_t nb_tx_ring_cp, nb_tx_ring_dp;
+    struct rte_udp_hdr *pkt_udp_hdr = nullptr;
+    struct iphdr *iph = nullptr, *innerIPHdr = nullptr;;
+    struct rte_ether_hdr *eth = nullptr;
+    struct rte_arp_hdr *arph = nullptr;
+    uint8_t dp_core_idx = 0;
+    uint64_t rxOffloadFlags = 0;
+    int nb_arp_req = 0, nb_arp_reply = 0;
+    struct sockaddr_in dnn_sa;
+    inet_pton(AF_INET, upfInstance->dnnInfo.peerIP.c_str(), &(dnn_sa.sin_addr));
+    rte_ether_addr_copy(&(upfInstance->dnnInfo.peerEthAddr), &(RTE_PER_LCORE(ulEthHdr).d_addr));
+    rte_ether_addr_copy(&(upfInstance->ports[upfInstance->PORT_DNN].eth_addr), &(RTE_PER_LCORE(ulEthHdr).s_addr));
+    RTE_PER_LCORE(ulEthHdr).ether_type = htons(RTE_ETHER_TYPE_IPV4);
+    RTE_PER_LCORE(numULPktsInBatch) = 0;
+
+// 2 "lines of interest"
+    //RTE_PER_LCORE(ulpktCnt) = 0;
+    //RTE_PER_LCORE(noPkt) = 0;
+    upfInstance->firstPacketInCore[lcoreNum] = true;
+    alwaysOnLog("receiving from RAN (core %u queue %u)...", rte_lcore_id(), lcoreNum - UL_DP_STARTING_LCORE); // [DIP] remove later
+    struct rte_eth_rss_conf rss_conf = {};
+    int hashConf = rte_eth_dev_rss_hash_conf_get(upfInstance->PORT_RAN, &rss_conf);
+    if(hashConf == SUCCESS)
+    {
+        successLog("Core:%u HF= %lx, RSS offloads:%lx", lcoreNum, rss_conf.rss_hf,
+                 upfInstance->ports[upfInstance->PORT_RAN].dev_info.flow_type_rss_offloads);
+    }
+    else
+    {
+        higLog("Error in fetching hash configuration");
+    }
+    
+    while(1)
+    {
+        if(forceQuit)
+            break;
+#ifdef DYNAMIC_SCALING_ENABLED
+        if(upfInstance->launchingNewCore)
+        {
+            continue;
+        }
+#endif
+        struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
+        nb_rx = rte_eth_rx_burst(upfInstance->PORT_RAN, lcoreNum - UL_DP_STARTING_LCORE, pkts_burst, MAX_PKT_BURST);
+// 2 "lines of interest"
+		double prevAverageQueueLength = RTE_PER_LCORE(averageQueueLength);
+		RTE_PER_LCORE(averageQueueLength) = prevAverageQueueLength*0.9999 + (0.0001 * nb_rx)/32;
+	    if ((nb_rx < 1))
+        {
+#ifdef QOS_ENABLED
+            /* carouselExtract() is called every MIN_GRANULARITY_NS interval 
+            * whenever there is no incoming pkts */
+            if(upfInstance->granularityTimerExpired == RTE_PER_LCORE(ulPerCoreGranularityTimer))
+            {
+                RTE_PER_LCORE(ulPerCoreGranularityTimer) = 1 - RTE_PER_LCORE(ulPerCoreGranularityTimer);
+                upfInstance->carouselExtractUL(lcoreNum, 
+                            &RTE_PER_LCORE(frontTimeStamp), UPLINK, COARSE, -1);
+            }
+#endif
+#ifdef DYNAMIC_SCALING_ENABLED
+// 1 "lines of interest"
+            //RTE_PER_LCORE(noPkt)++;
+#endif
+            continue;
+        }
+
+#ifdef DYNAMIC_SCALING_ENABLED
+        /* [DIP] Dunamic DP scaling */
+"latency of every stage in reconfiguring 5 lines of interest"
+	uint64_t now = rte_rdtsc();
+	uint64_t beforeStop = now;
+	uint64_t intermediate1= now;
+	uint64_t intermediate2= now;
+	uint64_t intermediate3= now;
+	uint64_t afterStart = now;
+        if(lcoreNum == MASTER_LCORE)
+        {
+           
+      "5 lines of interest"
+            RTE_PER_LCORE(pollingEvents)++;    
+            if(RTE_PER_LCORE(pollingEvents)>1000000)
+            {
+                RTE_PER_LCORE(pollingEvents) = 0;
+				    if (RTE_PER_LCORE(averageQueueLength) >= 0.9)
+                {
+                    upfInstance->ul_nb_rxq++;
+                    upfInstance->ul_nb_txq+=2;
+                    upfInstance->dl_nb_rxq++;
+                    upfInstance->dl_nb_txq+=2;
+                    upfInstance->launchingNewCore = true;
+                    // rte_pause();
+                    successLog("Stopping ports ...");
+		    		beforeStop = rte_rdtsc();
+                    upfInstance->stopPort(upfInstance->PORT_RAN);
+                    upfInstance->stopPort(upfInstance->PORT_DNN);
+
+		    		intermediate1 = rte_rdtsc();
+                    successLog("Reconfiguring ports...");
+		   			upfInstance->configureDynamic(RTE_PORT_ALL);
+                   // upfInstance->initPortConfig(RTE_PORT_ALL);
+		    		intermediate2 = rte_rdtsc();
+                    if(upfInstance->startPort(RTE_PORT_ALL) == SUCCESS)
+                    {
+                        successLog("Ports restarted successfully!!");
+                    }
+                    else
+                    {
+                        higLog("%s", "Port_RAN cannot be restarted");
+                        rte_exit(EXIT_FAILURE, "Terminating!!!");
+                    }
+                    rte_eth_promiscuous_enable(upfInstance->PORT_RAN);
+                    rte_eth_promiscuous_enable(upfInstance->PORT_DNN);
+                    successLog("Launching new UL DP processing core (core: %u)", upfInstance->currentULDPCoreLimit);
+		    intermediate3 = rte_rdtsc();
+                    rte_eal_remote_launch((lcore_function_t *)(pollForPackets),
+                                    upfInstance, 
+                                    (unsigned) upfInstance->currentULDPCoreLimit);
+                    upfInstance->launchingNewCore = false;
+                    upfInstance->currentULDPCoreLimit++;
+
+                    //upfInstance->noPktCnt = 0;
+		    afterStart = rte_rdtsc();
+		    upfInstance->coreStartLatency.push_back((intermediate1-beforeStop));
+		    upfInstance->coreStartLatency.push_back((intermediate2-intermediate1));
+		    upfInstance->coreStartLatency.push_back((intermediate3-intermediate2));
+		    upfInstance->coreStartLatency.push_back((afterStart-intermediate3));
+//		    upfInstance->coreStartLatency.push_back((afterStart-beforeStop));
+			RTE_PER_LCORE(averageQueueLength) = 0.5;
+                }
+            }
+        }
+#endif
+        for (int i = 0; i < nb_rx; i++)
+        {
+            rxOffloadFlags = pkts_burst[i]->ol_flags;
+            if(((rxOffloadFlags & PKT_RX_IP_CKSUM_MASK) == PKT_RX_IP_CKSUM_BAD) ||
+                    ((rxOffloadFlags & PKT_RX_L4_CKSUM_MASK) == PKT_RX_L4_CKSUM_BAD))
+            {
+                higLog("Recvd packet has bad IP/UDP varsion/checksum");
+                rte_mbuf_raw_free(pkts_burst[i]);
+                continue;
+            }
+
+            uint8_t *pktBuffer = rte_pktmbuf_mtod_offset(pkts_burst[i], uint8_t *, 0);    
+            eth = (struct rte_ether_hdr *)pktBuffer;
+            if(likely(eth->ether_type == RTE_ETHER_TYPE_IPV4_LE))
+            {
+                /* I have a L2 packet now in my hand. Check if packet is CP_packet 
+                * or DP_packet and enqueue rings accordingly
+                */
+                iph = (struct iphdr *)(pktBuffer + ETHERNET_HDR_LENGTH);
+                int ipType=(int)iph->version;
+                if(((uint8_t)iph->protocol != (uint8_t)IPHDR_UDP_PROTOCOL)
+                    && ((uint8_t)iph->protocol != (uint8_t)IPHDR_TCP_PROTOCOL))
+                {
+                    higLog("Unexpected packet.");
+                    rte_mbuf_raw_free(pkts_burst[i]);
+                    continue;
+                }                
+                // uplink packet
+                else if(likely((uint8_t)iph->protocol == (uint8_t)IPHDR_UDP_PROTOCOL))
+                {
+                    midLog("PFCP/GTP packet recvd in UPF from RAN. Sending it to DPT");
+                    /* Must be expected UDP packet */                    
+                    // [DIP] No need to update ARP every time, it will affect performance.
+
+                    pkt_udp_hdr = (struct rte_udp_hdr *)(pktBuffer +
+                                                ETHERNET_HDR_LENGTH + 
+                                                DEFAULT_IPV4_HDR_LENGTH);
+                    
+                    if (likely(pkt_udp_hdr->dst_port == GTP_PORT_LITTLE_ENDIAN)) // GTP packet coming from RAN
+                    {
+						RTE_PER_LCORE(pktCnt)++;
+                        if(RTE_PER_LCORE(pktCnt)%1000000 == 0)
+                       {
+                    	successLog("Core: %u, Average Load Factor %lf,", lcoreNum, RTE_PER_LCORE(averageQueueLength));
+                        }
+
+                    //	successLog("Core: %u, Average Load Factor %lf,", lcoreNum, RTE_PER_LCORE(averageQueueLength));
+                        upfInstance->uplinkPacketHandler(&pkts_burst[i], 
+                                lcoreNum, &RTE_PER_LCORE(ulEthHdr), &RTE_PER_LCORE(numULPktsInBatch),
+                                &RTE_PER_LCORE(frontTimeStamp));
+                    }
+                    else if (RTE_BE_TO_CPU_16(pkt_udp_hdr->dst_port) == PFCP_PORT) // PFCP packet, coming from SMF
+                    {
+                        /*
+                        * Adding SMF <IP,MAC> into the ARP table
+                        */
+                        midLog("Control Packet recvd in UPF from RAN. Sending it to CPT");
+                        midLog("Updating ARP table for IP %x", iph->saddr);
+                        upfInstance->arpTable[iph->saddr] = eth->s_addr;
+                        rte_ether_addr_copy(&(upfInstance->arpTable[iph->saddr]), 
+                                            &upfInstance->smfInfo.peerEthAddr);
+                        /* Enqueue PFCP msg to CP ring. CP will handle it and send out */
+                        nb_tx_ring_cp = rte_ring_mp_enqueue_burst(upfInstance->cp_ring, 
+                                                        (void **)pkts_burst, 
+                                                        1,
+                                                        NULL);
+                        if(nb_tx_ring_cp < 1)
+                        {
+                            lowLog("Couldn't write CP msg properly into SW ring");
+                            rte_mbuf_raw_free(pkts_burst[i]);
+                            // [DIP] what to do in failure case?
+                        }
+                    }
+                }
+                else if(ipType==IPVERSION && (uint8_t)iph->protocol == (uint8_t)IPHDR_TCP_PROTOCOL)
+                {
+                    if(iph->daddr != upfInstance->portRANSrcIPAddr &&
+                        iph->saddr != upfInstance->portRANSrcIPAddr) // removing rte_cpu_to_be_32
+                    {
+                        higLog("Unexpected TCP packet");
+                        rte_mbuf_raw_free(pkts_burst[i]);
+                        continue;
+                    }
+                    midLog("Received TCP packet");
+                    char hbIPPayload[MAX_MESSAGE_SIZE];
+                    int hbIPPayloadLen = pkts_burst[i]->data_len  - sizeof(struct rte_ether_hdr);
+                    rte_memcpy(hbIPPayload, 
+                                rte_pktmbuf_mtod_offset(pkts_burst[i], 
+                                                    char *, 
+                                                    sizeof(struct rte_ether_hdr)),
+                                hbIPPayloadLen);
+                    successLog("Copying HB msg, hence releasing incoming pkt");
+                    rte_mbuf_raw_free(pkts_burst[i]); 
+                    tunWrite(upfInstance->nrfTunFd, (char *)hbIPPayload, hbIPPayloadLen);
+                }
+            }
+            else if(RTE_BE_TO_CPU_16(eth->ether_type) == RTE_ETHER_TYPE_ARP)
+            {
+                // ARP packet received
+                alwaysOnLog("ARP packet received");
+                arph = (struct rte_arp_hdr *)(pktBuffer + sizeof(struct rte_ether_hdr));
+                if(RTE_BE_TO_CPU_16(arph->arp_opcode) == RTE_ARP_OP_REQUEST)
+                {
+                    do
+                    {
+                        nb_arp_req = rte_ring_sp_enqueue_burst(
+                                            upfInstance->arp_req_ring,
+                                            (void**)&pkts_burst[i],
+                                            1,
+                                            NULL);
+					}while(nb_arp_req==0);
+                }
+                else if(RTE_BE_TO_CPU_16(arph->arp_opcode) == ARP_OP_REPLY)
+                {
+                    do
+                    {
+                        nb_arp_reply = rte_ring_sp_enqueue_burst(
+                                            upfInstance->arp_reply_ring,
+                                            (void**)&pkts_burst[i],
+                                            1,
+                                            NULL);
+					}while(nb_arp_reply==0);
+                }
+                else
+                {
+                    higLog("Not an ARP request/reply pkt");
+                    rte_mbuf_raw_free(pkts_burst[i]);
+                }
+                continue;
+            }
+        }
+    }
+    LOG_EXIT;
+}
+
